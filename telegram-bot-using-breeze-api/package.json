@@ -1,0 +1,29 @@
+{
+  "name": "breeze-telegram-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node dist/bot.js",
+    "dev": "ts-node src/bot.ts",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.13",
+    "@solana/web3.js": "^1.98.2",
+    "bs58": "^6.0.0",
+    "dotenv": "^16.5.0",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.3",
+    "@types/node-telegram-bot-api": "^0.64.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
