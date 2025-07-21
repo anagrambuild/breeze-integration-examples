@@ -85,8 +85,6 @@ const breezeSDK = new BreezeSDK({
     apiKey: BREEZE_API_KEY
 });
 
-// Real-time portfolio tracking
-const userValue = await breezeSDK.getUserValue(userPublicKey);
 
 // Seamless deposits
 const depositTx = await breezeSDK.createDepositTransaction({
