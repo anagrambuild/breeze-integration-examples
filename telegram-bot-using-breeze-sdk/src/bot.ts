@@ -3,7 +3,7 @@ import { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } fro
 import { getAccount, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
-import { BreezeSDK } from 'sdk-brreeezze';
+import { BreezeSDK } from '@breezebaby/breeze-sdk';
 
 dotenv.config();
 
@@ -52,7 +52,7 @@ class BreezeBot {
         this.bot = new TelegramBot(BOT_TOKEN, { polling: true });
         this.connection = new Connection(SOLANA_RPC_URL);
         this.breezeSDK = new BreezeSDK({
-            baseUrl: 'http://localhost:8080',
+            baseUrl: 'https://api.breeze.baby/',
             apiKey: BREEZE_API_KEY
         });
         this.setupHandlers();

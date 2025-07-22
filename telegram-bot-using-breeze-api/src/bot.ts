@@ -348,7 +348,7 @@ class BreezeBot {
 
     private async getUserBalances(userPublicKey: string): Promise<BreezeUserBalancesResponse | null> {
         try {
-            const response = await fetch(`http://localhost:8080/user-balances/${userPublicKey}`, {
+            const response = await fetch(`https://api.breeze.baby/user-balances/${userPublicKey}`, {
                 method: 'GET',
                 headers: {
                     "Content-Type": "application/json",
@@ -371,7 +371,7 @@ class BreezeBot {
 
     private async getUserYield(userPublicKey: string, fundId?: string, page: number = 1, limit: number = 10): Promise<BreezeUserYieldResponse | null> {
         try {
-            let url = `http://localhost:8080/user-yield/${userPublicKey}?page=${page}&limit=${limit}`;
+            let url = `https://api.breeze.baby/user-yield/${userPublicKey}?page=${page}&limit=${limit}`;
             if (fundId) {
                 url += `&fund_id=${fundId}`;
             }
@@ -596,7 +596,7 @@ class BreezeBot {
             console.log('Deposit request body:', JSON.stringify(requestBody, null, 2));
 
             // Call Breeze API for deposit
-            const response = await fetch('http://localhost:8080/deposit/tx', {
+            const response = await fetch('https://api.breeze.baby/deposit/tx', {
                 method: 'POST',
                 headers: {
                     "Content-Type": "application/json",
@@ -672,7 +672,7 @@ class BreezeBot {
 
             console.log('Withdraw request body:', JSON.stringify(requestBody, null, 2));
 
-            const response = await fetch('http://localhost:8080/withdraw/tx', {
+            const response = await fetch('https://api.breeze.baby/withdraw/tx', {
                 method: 'POST',
                 headers: {
                     "Content-Type": "application/json",
