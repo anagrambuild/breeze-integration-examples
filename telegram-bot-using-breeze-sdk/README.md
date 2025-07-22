@@ -121,7 +121,7 @@ breeze-telegram-bot/
 ```json
 {
   "dependencies": {
-    "sdk-brreeezze": "^0.0.6",
+    "@breezebaby/breeze-sdk": "1.0.0",
     "@solana/web3.js": "^1.98.2",
     "@solana/spl-token": "^0.4.13",
     "node-telegram-bot-api": "^0.66.0",
