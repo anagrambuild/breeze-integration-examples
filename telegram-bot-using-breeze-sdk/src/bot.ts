@@ -232,6 +232,7 @@ class BreezeBot {
         const publicKey = userData.publicKey!;
         const balances = await this.getBalances(publicKey);
         const breezeBalance = await this.getUserCurrentValue(publicKey);
+        const currentYield = await this.getBreezeYieldFromAPI(publicKey);
 
         const message =
             '🌊 **BREEZE INTEGRATION BOT** 🌊\n\n' +
@@ -242,12 +243,17 @@ class BreezeBot {
             `• USDT: ${balances.usdt.human.toFixed(2)} 💵\n` +
             `• PYUSD: ${balances.pyusd.human.toFixed(2)} 💵\n` +
             `• USDS: ${balances.usds.human.toFixed(2)} 💵\n\n` +
-            `🌊 **Breeze Balance:** $${breezeBalance.toFixed(2)}\n\n` +
+            `🌊 **Breeze Balance:** $${breezeBalance.toFixed(2)}\n` +
+            `📈 **Current APY:** ${currentYield.toFixed(2)}%\n\n` +
             '🚀 Ready to earn yield with Breeze!';
 
         const keyboard = {
             inline_keyboard: [
                 [{ text: '🌊 Earn Yield with Breeze', callback_data: 'earn_yield' }],
+                [
+                    { text: '💳 Detailed Balances', callback_data: 'view_balances' },
+                    { text: '📈 Yield History', callback_data: 'view_yield_history' }
+                ],
                 [
                     { text: '💸 Buy', callback_data: 'buy_mock' },
                     { text: '💰 Sell', callback_data: 'sell_mock' }
@@ -272,43 +278,51 @@ class BreezeBot {
 
     private async getUserCurrentValue(userPublicKey: string): Promise<number> {
         try {
-            const data = await this.breezeSDK.getUserValue(userPublicKey);
+            const data = await this.breezeSDK.getUserBalances({
+                userId: userPublicKey
+            });
 
-            if (!data.success || !data.result) {
-                console.error('Error fetching user value from SDK');
-                return 0;
-            }
-
-            // Sum up all base asset values across different assets
-            let totalValue = 0;
-            for (const [baseAsset, positions] of Object.entries(data.result)) {
-                for (const position of positions) {
-                    // Convert from token units to human readable format
-                    const humanValue = this.convertFromTokenAmount(
-                        BigInt(Math.floor(position.base_asset_value)), 
-                        baseAsset
-                    );
-                    totalValue += humanValue;
-                }
-            }
-
-            return totalValue;
+            return parseFloat(data.total_portfolio_value) || 0;
         } catch (error) {
             console.error('Error fetching user current value:', error);
             return 0;
         }
     }
 
-    // TODO: update this mock function
-    private getMockBreezeYield(): number {
-        return 4.63; // Mock 4,63% yield
+    private async getBreezeYieldFromAPI(userPublicKey: string): Promise<number> {
+        try {
+            const yieldData = await this.breezeSDK.getUserYield({
+                userId: userPublicKey
+            });
+
+            if (!yieldData || !yieldData.yields || yieldData.yields.length === 0) {
+                return 0;
+            }
+
+            // Calculate average APY from all positions
+            let totalAPY = 0;
+            let count = 0;
+            
+            for (const position of yieldData.yields) {
+                const apy = parseFloat(position.apy);
+                if (!isNaN(apy)) {
+                    totalAPY += apy;
+                    count++;
+                }
+            }
+
+            return count > 0 ? totalAPY / count : 0;
+        } catch (error) {
+            console.error('Error calculating Breeze yield:', error);
+            return 0;
+        }
     }
 
     private async showEarnYieldInterface(chatId: number) {
         const userData = this.users.get(chatId)!;
         const publicKey = userData.publicKey!;
         const balances = await this.getBalances(publicKey);
-        const currentYield = this.getMockBreezeYield();
+        const currentYield = await this.getBreezeYieldFromAPI(publicKey);
         const breezeBalance = await this.getUserCurrentValue(publicKey);
 
         const message =
@@ -499,21 +513,19 @@ class BreezeBot {
 
         let humanAmount: number;
         let isAll = false;
-        let sharesAmount: number;
+        let tokenAmount: number;
 
         if (percentage === 100) {
             humanAmount = breezeBalance;
             isAll = true;
-            // For 100% withdrawals, we pass 0 as shares and set all=true
-            // This tells the API to withdraw all user's shares
-            sharesAmount = 0;
+            // For 100% withdrawals, we pass 0 as amount and set all=true
+            tokenAmount = 0;
         } else if (percentage === 50) {
             humanAmount = breezeBalance * 0.5;
-            // For partial withdrawals, calculate shares based on the USD amount
-            sharesAmount = Number(this.convertToTokenAmount(humanAmount, 'USDC'));
+            tokenAmount = Number(this.convertToTokenAmount(humanAmount, 'USDC'));
         } else if (customAmount) {
             humanAmount = customAmount;
-            sharesAmount = Number(this.convertToTokenAmount(customAmount, 'USDC'));
+            tokenAmount = Number(this.convertToTokenAmount(customAmount, 'USDC'));
         } else {
             return;
         }
@@ -523,15 +535,15 @@ class BreezeBot {
             return;
         }
 
-        console.log(`Withdraw: ${humanAmount} USDC (${sharesAmount} shares, all=${isAll})`);
+        console.log(`Withdraw: ${humanAmount} USDC (${tokenAmount} token units, all=${isAll})`);
 
         try {
-            console.log(`Creating withdraw transaction: ${humanAmount} USDC (${sharesAmount} shares, all=${isAll})`);
+            console.log(`Creating withdraw transaction: ${humanAmount} USDC (${tokenAmount} token units, all=${isAll})`);
 
             // Call Breeze SDK for withdraw
             const data = await this.breezeSDK.createWithdrawTransaction({
                 fundId: BREEZE_FUND_ID,
-                shares: sharesAmount,
+                amount: tokenAmount,
                 all: isAll,
                 userKey: userData.publicKey!,
                 payerKey: undefined
@@ -624,6 +636,102 @@ class BreezeBot {
         } catch (error) {
             console.error('Transaction error:', error);
             await this.bot.sendMessage(chatId, '❌ Failed to process transaction. Please try again.');
+        }
+    }
+
+    private async showDetailedBalances(chatId: number) {
+        const userData = this.users.get(chatId)!;
+        const publicKey = userData.publicKey!;
+
+        try {
+            const breezeBalances = await this.breezeSDK.getUserBalances({
+                userId: publicKey
+            });
+
+            let message = '💳 **Detailed Breeze Balances** 💳\n\n';
+            message += `💰 **Total Portfolio Value:** $${parseFloat(breezeBalances.total_portfolio_value).toFixed(2)}\n`;
+            message += `🎯 **Total Yield Earned:** $${parseFloat(breezeBalances.total_yield_earned).toFixed(2)}\n\n`;
+
+            if (breezeBalances.balances.length === 0) {
+                message += 'No positions found in Breeze.';
+            } else {
+                for (const balance of breezeBalances.balances) {
+                    message += `**${balance.symbol}**\n`;
+                    message += `• Wallet Balance: ${parseFloat(balance.wallet_balance).toFixed(6)}\n`;
+                    message += `• Total Balance: ${parseFloat(balance.total_balance).toFixed(6)}\n`;
+                    message += `• Total Yield: $${parseFloat(balance.total_yield).toFixed(2)}\n`;
+
+                    if (balance.fund_positions.length > 0) {
+                        message += `• Fund Positions:\n`;
+                        for (const position of balance.fund_positions) {
+                            message += `  - ${position.fund_name}: $${parseFloat(position.position_value).toFixed(2)} (APY: ${parseFloat(position.apy).toFixed(2)}%)\n`;
+                        }
+                    }
+                    message += '\n';
+                }
+            }
+
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '🔙 Back to Main', callback_data: 'back_to_main' }]
+                ]
+            };
+
+            await this.bot.sendMessage(chatId, message, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard
+            });
+        } catch (error) {
+            console.error('Error fetching detailed balances:', error);
+            await this.bot.sendMessage(chatId, '❌ Unable to fetch Breeze balances. Please try again later.');
+        }
+    }
+
+    private async showYieldHistory(chatId: number) {
+        const userData = this.users.get(chatId)!;
+        const publicKey = userData.publicKey!;
+
+        try {
+            const yieldData = await this.breezeSDK.getUserYield({
+                userId: publicKey
+            });
+
+            let message = '📈 **Yield History** 📈\n\n';
+            message += `💰 **Total Yield Earned:** $${parseFloat(yieldData.total_yield_earned).toFixed(2)}\n\n`;
+
+            if (yieldData.yields.length === 0) {
+                message += 'No yield history found.';
+            } else {
+                for (const yieldEntry of yieldData.yields) {
+                    const entryDate = new Date(yieldEntry.entry_date).toLocaleDateString();
+                    const lastUpdated = new Date(yieldEntry.last_updated).toLocaleDateString();
+                    
+                    message += `**${yieldEntry.fund_name}** (${yieldEntry.base_asset})\n`;
+                    message += `• Position Value: $${parseFloat(yieldEntry.position_value).toFixed(2)}\n`;
+                    message += `• Yield Earned: $${parseFloat(yieldEntry.yield_earned).toFixed(2)}\n`;
+                    message += `• APY: ${parseFloat(yieldEntry.apy).toFixed(2)}%\n`;
+                    message += `• Entry Date: ${entryDate}\n`;
+                    message += `• Last Updated: ${lastUpdated}\n\n`;
+                }
+
+                if (yieldData.pagination.total_pages > 1) {
+                    message += `📄 Page ${yieldData.pagination.page} of ${yieldData.pagination.total_pages} (${yieldData.pagination.total_items} total items)`;
+                }
+            }
+
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '🔙 Back to Main', callback_data: 'back_to_main' }]
+                ]
+            };
+
+            await this.bot.sendMessage(chatId, message, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard
+            });
+        } catch (error) {
+            console.error('Error fetching yield history:', error);
+            await this.bot.sendMessage(chatId, '❌ Unable to fetch yield history. Please try again later.');
         }
     }
 
@@ -722,6 +830,12 @@ class BreezeBot {
                 break;
             case 'slippage_mock':
                 await this.handleMockFeature(chatId, 'slippage');
+                break;
+            case 'view_balances':
+                await this.showDetailedBalances(chatId);
+                break;
+            case 'view_yield_history':
+                await this.showYieldHistory(chatId);
                 break;
         }
     }
