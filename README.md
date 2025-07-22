@@ -20,7 +20,7 @@ An enhanced Telegram bot implementation using the Breeze SDK for more advanced f
 - Simplified authentication
 - Advanced conversation handling
 
-### Website with Breeze UI Library
+### Website with Breeze UI Library (Coming soon)
 A modern web application showcasing the Breeze UI Library components and design system.
 
 **Features:**
