@@ -81,7 +81,7 @@ The bot leverages the Breeze SDK for simplified DeFi operations:
 ```typescript
 // Initialize Breeze SDK
 const breezeSDK = new BreezeSDK({
-    baseUrl: 'https://api.breeze.baby',
+    baseUrl: 'https://api.breeze.baby/',
     apiKey: BREEZE_API_KEY
 });
 
