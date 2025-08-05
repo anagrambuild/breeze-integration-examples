@@ -6,64 +6,54 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-interface BreezeApiResponse {
-    success: boolean;
-    result?: string; // This contains the serialized transaction
-    error?: string;
-    [key: string]: any;
+type BreezeApiResponseUpdated =
+    | string // when the response is just the serialized transaction
+    | { message: string }; // when there's an error
+
+interface BreezeUserBalancesInstance {
+    token_address: string;
+    token_symbol: string;
+    token_name: string;
+    decimals: number;
+    total_balance: number;
+    yield_balance: BreezeUserBalancesYieldsInstance;
 }
 
-interface BreezeUserValueResponse {
-    success: boolean;
-    result?: {
-        base_asset: string;
-        position: {
-            fund_id: string;
-            base_asset_value: number;
-            percent_of_fund: number;
-            total_fund_value: number;
-        };
-    }[];
-    error?: string;
+interface BreezeUserBalancesYieldsInstance {
+    fund_id: string;
+    funds: string; // amount of funds
+    amount_of_yield: string;
+    fund_apy: number;
 }
-
 interface BreezeUserBalancesResponse {
-    balances: {
-        asset: string;
-        symbol: string;
-        wallet_balance: string;
-        total_balance: string;
-        total_yield: string;
-        fund_positions: {
-            fund_id: string;
-            fund_name: string;
-            position_value: string;
-            yield_earned: string;
-            apy: string;
-        }[];
-    }[];
-    total_portfolio_value: string;
-    total_yield_earned: string;
-}
-
-interface BreezeUserYieldResponse {
-    pagination: {
-        limit: number;
+    data: BreezeUserBalancesInstance[];
+    meta: {
         page: number;
-        total_items: number;
+        per_page: number;
+        total: number;
         total_pages: number;
-    };
-    total_yield_earned: string;
-    yields: {
-        apy: string;
-        base_asset: string;
-        entry_date: string;
-        fund_id: string;
-        fund_name: string;
-        last_updated: string;
-        position_value: string;
-        yield_earned: string;
-    }[];
+        has_more: boolean;
+    }
+}
+interface BreezeUserYieldInstance {
+    fund_id: string;
+    fund_name: string;
+    base_asset: string;
+    position_value: string;
+    yield_earned: string;
+    apy: string;
+    entry_date: string;
+    last_updated: string;
+}
+interface BreezeUserYieldResponse {
+    data: BreezeUserYieldInstance[];
+    meta: {
+        page: number;
+        per_page: number;
+        total: number;
+        total_pages: number;
+        has_more: boolean;
+    }
 }
 
 // Add token decimals configuration
@@ -334,12 +324,25 @@ class BreezeBot {
         try {
             // Use the new user-balances endpoint to get the total portfolio value
             const balanceData = await this.getUserBalances(userPublicKey);
-            
+
             if (!balanceData) {
                 return 0;
             }
 
-            return parseFloat(balanceData.total_portfolio_value) || 0;
+            let totalPortfolioValue: number = 0;
+            for (const balance of balanceData.data) {
+                if (!balance.yield_balance) {
+                    continue;
+                }
+                // FIXED: Convert from token amount to human readable
+                const humanAmount = this.convertFromTokenAmount(
+                    BigInt(balance.yield_balance.funds), 
+                    balance.token_symbol
+                );
+                totalPortfolioValue += humanAmount;
+            }
+
+            return totalPortfolioValue;
         } catch (error) {
             console.error('Error fetching user current value:', error);
             return 0;
@@ -400,15 +403,15 @@ class BreezeBot {
     private async getBreezeYieldFromAPI(userPublicKey: string): Promise<number> {
         try {
             const yieldData = await this.getUserYield(userPublicKey);
-            if (!yieldData || !yieldData.yields || yieldData.yields.length === 0) {
+            if (!yieldData || !yieldData.data || yieldData.data.length === 0) {
                 return 0;
             }
 
             // Calculate average APY from all positions
             let totalAPY = 0;
             let count = 0;
-            
-            for (const position of yieldData.yields) {
+
+            for (const position of yieldData.data) {
                 const apy = parseFloat(position.apy);
                 if (!isNaN(apy)) {
                     totalAPY += apy;
@@ -603,22 +606,20 @@ class BreezeBot {
                     "x-api-key": BREEZE_API_KEY
                 },
                 body: JSON.stringify(requestBody)
+            }).catch((error) => {
+                console.error('Deposit error:', error);
+                throw error;
             });
 
-            const data = await response.json() as BreezeApiResponse;
+            const data = await response.json() as BreezeApiResponseUpdated;
 
-            if (!data.success || data.error) {
-                await this.bot.sendMessage(chatId, `❌ Error: ${data.error || 'Unknown error'}`);
-                return;
-            }
-
-            if (!data.result) {
-                await this.bot.sendMessage(chatId, '❌ Error: No transaction data received');
+            if (typeof data === 'object' && 'message' in data) {
+                await this.bot.sendMessage(chatId, `❌ Error: ${data.message}`);
                 return;
             }
 
             userData.pendingTransaction = {
-                serializedTx: data.result,
+                serializedTx: data,
                 type: 'deposit',
                 amount: humanAmount,
                 asset: 'USDC'
@@ -681,20 +682,15 @@ class BreezeBot {
                 body: JSON.stringify(requestBody)
             });
 
-            const data = await response.json() as BreezeApiResponse;
+            const data = await response.json() as BreezeApiResponseUpdated;
 
-            if (!data.success || data.error) {
-                await this.bot.sendMessage(chatId, `❌ Error: ${data.error || 'Unknown error'}`);
-                return;
-            }
-
-            if (!data.result) {
-                await this.bot.sendMessage(chatId, '❌ Error: No transaction data received');
+            if (typeof data === 'object' && 'message' in data) {
+                await this.bot.sendMessage(chatId, `❌ Error: ${data.message}`);
                 return;
             }
 
             userData.pendingTransaction = {
-                serializedTx: data.result,
+                serializedTx: data,
                 type: 'withdraw',
                 amount: humanAmount,
                 asset: 'USDC'
@@ -788,24 +784,61 @@ class BreezeBot {
             return;
         }
 
-        let message = '💳 **Detailed Breeze Balances** 💳\n\n';
-        message += `💰 **Total Portfolio Value:** $${parseFloat(breezeBalances.total_portfolio_value).toFixed(2)}\n`;
-        message += `🎯 **Total Yield Earned:** $${parseFloat(breezeBalances.total_yield_earned).toFixed(2)}\n\n`;
+        let totalPortfolioValue = 0;
+        let totalYieldEarned = 0;
+        let breezePosition: boolean = false;
+        
+        for (const balance of breezeBalances.data) {
+            if (!balance.yield_balance) {
+                continue;
+            }
+            // FIXED: Convert from token amounts to human readable
+            const positionValue = this.convertFromTokenAmount(
+                BigInt(balance.yield_balance.funds), 
+                balance.token_symbol
+            );
+            const yieldEarned = this.convertFromTokenAmount(
+                BigInt(balance.yield_balance.amount_of_yield), 
+                balance.token_symbol
+            );
+            
+            totalPortfolioValue += positionValue;
+            totalYieldEarned += yieldEarned;
+            breezePosition = true;
+        }
 
-        if (breezeBalances.balances.length === 0) {
+        let message = '💳 **Detailed Breeze Balances** 💳\n\n';
+        message += `💰 **Total Portfolio Value:** $${totalPortfolioValue.toFixed(6)}\n`;
+        message += `🎯 **Total Yield Earned:** $${totalYieldEarned.toFixed(6)}\n\n`;
+
+        if (breezeBalances.data.length === 0) {
             message += 'No positions found in Breeze.';
         } else {
-            for (const balance of breezeBalances.balances) {
-                message += `**${balance.symbol}**\n`;
-                message += `• Wallet Balance: ${parseFloat(balance.wallet_balance).toFixed(6)}\n`;
-                message += `• Total Balance: ${parseFloat(balance.total_balance).toFixed(6)}\n`;
-                message += `• Total Yield: $${parseFloat(balance.total_yield).toFixed(2)}\n`;
+            for (const balance of breezeBalances.data) {
+                message += `**${balance.token_symbol}**\n`;
+                
+                // FIXED: Convert wallet balance from token amount
+                const walletBalance = this.convertFromTokenAmount(
+                    BigInt(balance.total_balance), 
+                    balance.token_symbol
+                );
+                message += `• Wallet Balance: ${walletBalance.toFixed(6)}\n`;
+                message += `• Total Balance: ${walletBalance.toFixed(6)}\n`;
 
-                if (balance.fund_positions.length > 0) {
+                if (balance.yield_balance) {
+                    // FIXED: Convert yield balance amounts
+                    const positionValue = this.convertFromTokenAmount(
+                        BigInt(balance.yield_balance.funds), 
+                        balance.token_symbol
+                    );
+                    const yieldEarned = this.convertFromTokenAmount(
+                        BigInt(balance.yield_balance.amount_of_yield), 
+                        balance.token_symbol
+                    );
+                    
                     message += `• Fund Positions:\n`;
-                    for (const position of balance.fund_positions) {
-                        message += `  - ${position.fund_name}: $${parseFloat(position.position_value).toFixed(2)} (APY: ${parseFloat(position.apy).toFixed(2)}%)\n`;
-                    }
+                    message += `- Total Yield: $${yieldEarned.toFixed(2)}\n`;
+                    message += `- ${balance.yield_balance.fund_id}: $${positionValue.toFixed(6)} (APY: ${balance.yield_balance.fund_apy.toFixed(6)}%)\n`;
                 }
                 message += '\n';
             }
@@ -833,26 +866,60 @@ class BreezeBot {
             return;
         }
 
-        let message = '📈 **Yield History** 📈\n\n';
-        message += `💰 **Total Yield Earned:** $${parseFloat(yieldData.total_yield_earned).toFixed(2)}\n\n`;
+        let totalYieldEarned: number = 0;
+        
+        // FIXED: Calculate total yield earned by converting from token amounts
+        for (const position of yieldData.data) {
+            // Assuming yield_earned is in token amounts, convert to human readable
+            // You might need to determine the token symbol for each position
+            // If the API doesn't provide token symbol, you might need to infer it from base_asset
+            const tokenSymbol = position.base_asset === 'USDC' ? 'USDC' : 
+                              position.base_asset === 'USDT' ? 'USDT' : 
+                              position.base_asset === 'PYUSD' ? 'PYUSD' : 
+                              position.base_asset === 'USDS' ? 'USDS' : 'USDC'; // default to USDC
+            
+            const yieldEarned = this.convertFromTokenAmount(
+                BigInt(position.yield_earned), 
+                tokenSymbol
+            );
+            totalYieldEarned += yieldEarned;
+        }
 
-        if (yieldData.yields.length === 0) {
+        let message = '📈 **Yield History** 📈\n\n';
+        message += `💰 **Total Yield Earned:** $${totalYieldEarned.toFixed(2)}\n\n`;
+
+        if (yieldData.data.length === 0) {
             message += 'No yield history found.';
         } else {
-            for (const yieldEntry of yieldData.yields) {
+            for (const yieldEntry of yieldData.data) {
                 const entryDate = new Date(yieldEntry.entry_date).toLocaleDateString();
                 const lastUpdated = new Date(yieldEntry.last_updated).toLocaleDateString();
+
+                // FIXED: Convert position value and yield earned from token amounts
+                const tokenSymbol = yieldEntry.base_asset === 'USDC' ? 'USDC' : 
+                                  yieldEntry.base_asset === 'USDT' ? 'USDT' : 
+                                  yieldEntry.base_asset === 'PYUSD' ? 'PYUSD' : 
+                                  yieldEntry.base_asset === 'USDS' ? 'USDS' : 'USDC';
                 
+                const positionValue = this.convertFromTokenAmount(
+                    BigInt(yieldEntry.position_value), 
+                    tokenSymbol
+                );
+                const yieldEarned = this.convertFromTokenAmount(
+                    BigInt(yieldEntry.yield_earned), 
+                    tokenSymbol
+                );
+
                 message += `**${yieldEntry.fund_name}** (${yieldEntry.base_asset})\n`;
-                message += `• Position Value: $${parseFloat(yieldEntry.position_value).toFixed(2)}\n`;
-                message += `• Yield Earned: $${parseFloat(yieldEntry.yield_earned).toFixed(2)}\n`;
-                message += `• APY: ${parseFloat(yieldEntry.apy).toFixed(2)}%\n`;
+                message += `• Position Value: $${positionValue.toFixed(6)}\n`;
+                message += `• Yield Earned: $${yieldEarned.toFixed(6)}\n`;
+                message += `• APY: ${parseFloat(yieldEntry.apy).toFixed(6)}%\n`;
                 message += `• Entry Date: ${entryDate}\n`;
                 message += `• Last Updated: ${lastUpdated}\n\n`;
             }
 
-            if (yieldData.pagination.total_pages > 1) {
-                message += `📄 Page ${yieldData.pagination.page} of ${yieldData.pagination.total_pages} (${yieldData.pagination.total_items} total items)`;
+            if (yieldData.meta.total_pages > 1) {
+                message += `📄 Page ${yieldData.meta.page} of ${yieldData.meta.total_pages}`;
             }
         }
 
