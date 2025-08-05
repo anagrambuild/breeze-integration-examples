@@ -282,7 +282,14 @@ class BreezeBot {
                 userId: userPublicKey
             });
 
-            return parseFloat(data.total_portfolio_value) || 0;
+            // Calculate total from data array
+            let total = 0;
+            for (const balance of data.data) {
+                if (balance.yield_balance) {
+                    total += parseFloat(balance.yield_balance.funds) / Math.pow(10, balance.decimals);
+                }
+            }
+            return total;
         } catch (error) {
             console.error('Error fetching user current value:', error);
             return 0;
@@ -295,7 +302,7 @@ class BreezeBot {
                 userId: userPublicKey
             });
 
-            if (!yieldData || !yieldData.yields || yieldData.yields.length === 0) {
+            if (!yieldData || !yieldData.data || yieldData.data.length === 0) {
                 return 0;
             }
 
@@ -303,7 +310,7 @@ class BreezeBot {
             let totalAPY = 0;
             let count = 0;
             
-            for (const position of yieldData.yields) {
+            for (const position of yieldData.data) {
                 const apy = parseFloat(position.apy);
                 if (!isNaN(apy)) {
                     totalAPY += apy;
@@ -488,13 +495,14 @@ class BreezeBot {
                 payerKey: undefined
             });
 
-            if (!data.success || !data.result) {
-                await this.bot.sendMessage(chatId, `❌ Error: Failed to create deposit transaction`);
+            // Check if response is string (success) or error object
+            if (typeof data === 'object' && 'message' in data) {
+                await this.bot.sendMessage(chatId, `❌ Error: ${data.message}`);
                 return;
             }
 
             userData.pendingTransaction = {
-                serializedTx: data.result,
+                serializedTx: data as string,
                 type: 'deposit',
                 amount: humanAmount,
                 asset: 'USDC'
@@ -549,13 +557,14 @@ class BreezeBot {
                 payerKey: undefined
             });
 
-            if (!data.success || !data.result) {
-                await this.bot.sendMessage(chatId, `❌ Error: Failed to create withdraw transaction`);
+            // Check if response is string (success) or error object
+            if (typeof data === 'object' && 'message' in data) {
+                await this.bot.sendMessage(chatId, `❌ Error: ${data.message}`);
                 return;
             }
 
             userData.pendingTransaction = {
-                serializedTx: data.result,
+                serializedTx: data as string,
                 type: 'withdraw',
                 amount: humanAmount,
                 asset: 'USDC'
@@ -649,23 +658,42 @@ class BreezeBot {
             });
 
             let message = '💳 **Detailed Breeze Balances** 💳\n\n';
-            message += `💰 **Total Portfolio Value:** $${parseFloat(breezeBalances.total_portfolio_value).toFixed(2)}\n`;
-            message += `🎯 **Total Yield Earned:** $${parseFloat(breezeBalances.total_yield_earned).toFixed(2)}\n\n`;
+            
+            // Calculate totals from data array
+            let totalPortfolioValue = 0;
+            let totalYieldEarned = 0;
+            
+            for (const balance of breezeBalances.data) {
+                if (balance.yield_balance) {
+                    const funds = parseFloat(balance.yield_balance.funds) / Math.pow(10, balance.decimals);
+                    const yieldAmount = parseFloat(balance.yield_balance.amount_of_yield) / Math.pow(10, balance.decimals);
+                    totalPortfolioValue += funds;
+                    totalYieldEarned += yieldAmount;
+                }
+            }
 
-            if (breezeBalances.balances.length === 0) {
+            message += `💰 **Total Portfolio Value:** $${totalPortfolioValue.toFixed(2)}\n`;
+            message += `🎯 **Total Yield Earned:** $${totalYieldEarned.toFixed(2)}\n\n`;
+
+            if (breezeBalances.data.length === 0) {
                 message += 'No positions found in Breeze.';
             } else {
-                for (const balance of breezeBalances.balances) {
-                    message += `**${balance.symbol}**\n`;
-                    message += `• Wallet Balance: ${parseFloat(balance.wallet_balance).toFixed(6)}\n`;
-                    message += `• Total Balance: ${parseFloat(balance.total_balance).toFixed(6)}\n`;
-                    message += `• Total Yield: $${parseFloat(balance.total_yield).toFixed(2)}\n`;
+                for (const balance of breezeBalances.data) {
+                    const totalBalance = parseFloat(balance.total_balance.toString()) / Math.pow(10, balance.decimals);
+                    
+                    message += `**${balance.token_symbol}**\n`;
+                    message += `• Total Balance: ${totalBalance.toFixed(6)}\n`;
 
-                    if (balance.fund_positions.length > 0) {
-                        message += `• Fund Positions:\n`;
-                        for (const position of balance.fund_positions) {
-                            message += `  - ${position.fund_name}: $${parseFloat(position.position_value).toFixed(2)} (APY: ${parseFloat(position.apy).toFixed(2)}%)\n`;
-                        }
+                    if (balance.yield_balance) {
+                        const funds = parseFloat(balance.yield_balance.funds) / Math.pow(10, balance.decimals);
+                        const yieldAmount = parseFloat(balance.yield_balance.amount_of_yield) / Math.pow(10, balance.decimals);
+                        const apy = parseFloat(balance.yield_balance.fund_apy.toString());
+                        
+                        message += `• Breeze Position: ${funds.toFixed(6)}\n`;
+                        message += `• Yield Earned: $${yieldAmount.toFixed(6)}\n`;
+                        message += `• APY: ${apy.toFixed(2)}%\n`;
+                    } else {
+                        message += `• No Breeze position\n`;
                     }
                     message += '\n';
                 }
@@ -697,12 +725,19 @@ class BreezeBot {
             });
 
             let message = '📈 **Yield History** 📈\n\n';
-            message += `💰 **Total Yield Earned:** $${parseFloat(yieldData.total_yield_earned).toFixed(2)}\n\n`;
+            
+            // Calculate total yield earned from data array
+            let totalYieldEarned = 0;
+            for (const yieldEntry of yieldData.data) {
+                totalYieldEarned += parseFloat(yieldEntry.yield_earned);
+            }
+            
+            message += `💰 **Total Yield Earned:** $${totalYieldEarned.toFixed(2)}\n\n`;
 
-            if (yieldData.yields.length === 0) {
+            if (yieldData.data.length === 0) {
                 message += 'No yield history found.';
             } else {
-                for (const yieldEntry of yieldData.yields) {
+                for (const yieldEntry of yieldData.data) {
                     const entryDate = new Date(yieldEntry.entry_date).toLocaleDateString();
                     const lastUpdated = new Date(yieldEntry.last_updated).toLocaleDateString();
                     
@@ -714,8 +749,8 @@ class BreezeBot {
                     message += `• Last Updated: ${lastUpdated}\n\n`;
                 }
 
-                if (yieldData.pagination.total_pages > 1) {
-                    message += `📄 Page ${yieldData.pagination.page} of ${yieldData.pagination.total_pages} (${yieldData.pagination.total_items} total items)`;
+                if (yieldData.meta.total_pages > 1) {
+                    message += `📄 Page ${yieldData.meta.page} of ${yieldData.meta.total_pages} (${yieldData.meta.total} total items)`;
                 }
             }
 

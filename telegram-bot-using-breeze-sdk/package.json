@@ -15,12 +15,13 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@breezebaby/breeze-sdk": "^1.5.0",
     "@solana/spl-token": "^0.4.13",
     "@solana/web3.js": "^1.98.2",
     "bs58": "^6.0.0",
     "dotenv": "^16.5.0",
     "node-telegram-bot-api": "^0.66.0",
-    "@breezebaby/breeze-sdk": "0.0.1"
+    "sdk-brreeezze": "^0.0.9"
   },
   "devDependencies": {
     "@types/node": "^24.0.3",
