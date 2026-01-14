@@ -1,39 +1,54 @@
 import TelegramBot from 'node-telegram-bot-api';
-import { Connection, PublicKey, Keypair, VersionedTransaction, Transaction } from '@solana/web3.js';
-import { getAccount, getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { Connection, PublicKey, Keypair, VersionedTransaction } from '@solana/web3.js';
+import { getAccount, getAssociatedTokenAddress } from '@solana/spl-token';
 import bs58 from 'bs58';
 import dotenv from 'dotenv';
 import { BreezeSDK } from '@breezebaby/breeze-sdk';
 
 dotenv.config();
 
-// Add token decimals configuration
-const TOKEN_DECIMALS = {
-    USDC: 6,
-    USDT: 6,
-    PYUSD: 6,
-    USDS: 6,
-    SOL: 9
-};
+// Available assets configuration (matching breeze-tester-2)
+interface AssetConfig {
+    symbol: string;
+    mint: string;
+    decimals: number;
+}
+
+const AVAILABLE_ASSETS: AssetConfig[] = [
+    { symbol: 'USDC', mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 },
+    { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6 },
+    { symbol: 'USDS', mint: 'USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA', decimals: 6 },
+    { symbol: 'JupSOL', mint: 'jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v', decimals: 9 },
+    { symbol: 'JLP', mint: '27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4', decimals: 6 },
+    { symbol: 'mSOL', mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', decimals: 9 },
+    { symbol: 'JitoSOL', mint: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', decimals: 9 },
+    { symbol: 'SOL', mint: 'So11111111111111111111111111111111111111112', decimals: 9 },
+];
+
+// Helper to get asset by symbol
+const getAssetBySymbol = (symbol: string): AssetConfig | undefined =>
+    AVAILABLE_ASSETS.find(a => a.symbol === symbol);
 
 // Environment variables
-const BOT_TOKEN = process.env.BOT_TOKEN!;
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || process.env.BOT_TOKEN!;
 const SOLANA_RPC_URL = process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com';
 const BREEZE_API_KEY = process.env.BREEZE_API_KEY!;
-const BREEZE_FUND_ID = process.env.BREEZE_FUND_ID!;
+const STRATEGY_ID = process.env.STRATEGY_ID!;
 
-// Token mint addresses (mainnet)
-const TOKEN_MINTS = {
-    USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-    USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY7xgxACzBn3wqHg',
-    PYUSD: 'CXk2AMBfi3TwaEL2468s6zP8xq9NxTXjp9gjMgzeUynM',
-    USDS: '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo'
-};
+// Strategy info type
+interface StrategyInfo {
+    strategy_id: string;
+    strategy_name: string;
+    assets: string[];
+    apy: number;
+    apy_per_asset: Record<string, number>;
+}
 
 interface UserData {
     keypair?: Keypair;
     publicKey?: string;
     currentMenu?: string;
+    selectedAsset?: AssetConfig;
     pendingTransaction?: {
         serializedTx: string;
         type: 'deposit' | 'withdraw';
@@ -47,6 +62,9 @@ class BreezeBot {
     private connection: Connection;
     private breezeSDK: BreezeSDK;
     private users: Map<number, UserData> = new Map();
+    private strategyInfo: StrategyInfo | null = null;
+    private strategyInfoLastFetch: number = 0;
+    private readonly STRATEGY_INFO_CACHE_TTL = 60000; // 1 minute cache
 
     constructor() {
         this.bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -56,6 +74,32 @@ class BreezeBot {
             apiKey: BREEZE_API_KEY
         });
         this.setupHandlers();
+        // Fetch strategy info on startup
+        this.fetchStrategyInfo();
+    }
+
+    // Fetch strategy info (APY per asset) using SDK
+    private async fetchStrategyInfo(): Promise<StrategyInfo | null> {
+        const now = Date.now();
+        if (this.strategyInfo && (now - this.strategyInfoLastFetch) < this.STRATEGY_INFO_CACHE_TTL) {
+            return this.strategyInfo;
+        }
+
+        try {
+            this.strategyInfo = await this.breezeSDK.getStrategyInfo(STRATEGY_ID);
+            this.strategyInfoLastFetch = now;
+            console.log('Strategy info fetched:', this.strategyInfo);
+            return this.strategyInfo;
+        } catch (error) {
+            console.error('Error fetching strategy info:', error);
+            return this.strategyInfo;
+        }
+    }
+
+    // Get APY for a specific mint
+    private getApyForMint(mint: string): number | null {
+        if (!this.strategyInfo?.apy_per_asset) return null;
+        return this.strategyInfo.apy_per_asset[mint] ?? null;
     }
 
     private setupHandlers() {
@@ -65,10 +109,8 @@ class BreezeBot {
     }
 
 
-    // FIXED: Better decimal handling for token amounts
-    private convertToTokenAmount(humanAmount: number, tokenSymbol: string): bigint {
-        const decimals = TOKEN_DECIMALS[tokenSymbol as keyof typeof TOKEN_DECIMALS] || 6;
-
+    // Convert human-readable amount to token units
+    private convertToTokenAmount(humanAmount: number, decimals: number): bigint {
         // Use string manipulation for precise decimal handling
         const amountStr = humanAmount.toFixed(decimals);
         const [integerPart, decimalPart = ''] = amountStr.split('.');
@@ -81,8 +123,7 @@ class BreezeBot {
         return BigInt(fullAmountStr);
     }
 
-    private convertFromTokenAmount(tokenAmount: bigint, tokenSymbol: string): number {
-        const decimals = TOKEN_DECIMALS[tokenSymbol as keyof typeof TOKEN_DECIMALS] || 6;
+    private convertFromTokenAmount(tokenAmount: bigint, decimals: number): number {
         const divisor = BigInt(10 ** decimals);
 
         // Convert to number with proper decimal places
@@ -93,50 +134,45 @@ class BreezeBot {
         return integerPart + decimalPart;
     }
 
-    // FIXED: Better balance handling for exact amounts
-    private async getBalances(publicKey: string) {
+    // Get balance for a specific asset
+    private async getAssetBalance(publicKey: string, asset: AssetConfig): Promise<{ raw: bigint; human: number }> {
         try {
             const pubKey = new PublicKey(publicKey);
 
-            // Get SOL balance
-            const solBalance = await this.connection.getBalance(pubKey) / 1e9;
-
-            // Get token balances
-            const balances = {
-                sol: solBalance,
-                usdc: { raw: BigInt(0), human: 0 },
-                usdt: { raw: BigInt(0), human: 0 },
-                pyusd: { raw: BigInt(0), human: 0 },
-                usds: { raw: BigInt(0), human: 0 }
-            };
-
-            for (const [symbol, mint] of Object.entries(TOKEN_MINTS)) {
-                try {
-                    const tokenMint = new PublicKey(mint);
-                    const tokenAccount = await getAssociatedTokenAddress(tokenMint, pubKey);
-                    const accountInfo = await getAccount(this.connection, tokenAccount);
-
-                    const rawAmount = BigInt(accountInfo.amount.toString());
-                    const humanAmount = this.convertFromTokenAmount(rawAmount, symbol);
-
-                    const key = symbol.toLowerCase() as 'usdc' | 'usdt' | 'pyusd' | 'usds';
-                    balances[key] = { raw: rawAmount, human: humanAmount };
-                } catch (error) {
-                    // Token account doesn't exist, balance remains 0
-                }
+            // Handle native SOL differently
+            if (asset.symbol === 'SOL') {
+                const lamports = await this.connection.getBalance(pubKey);
+                return {
+                    raw: BigInt(lamports),
+                    human: lamports / Math.pow(10, asset.decimals)
+                };
             }
 
-            return balances;
+            // SPL token balance
+            const tokenMint = new PublicKey(asset.mint);
+            const tokenAccount = await getAssociatedTokenAddress(tokenMint, pubKey);
+            const accountInfo = await getAccount(this.connection, tokenAccount);
+
+            const rawAmount = BigInt(accountInfo.amount.toString());
+            const humanAmount = this.convertFromTokenAmount(rawAmount, asset.decimals);
+
+            return { raw: rawAmount, human: humanAmount };
         } catch (error) {
-            console.error('Error fetching balances:', error);
-            return {
-                sol: 0,
-                usdc: { raw: BigInt(0), human: 0 },
-                usdt: { raw: BigInt(0), human: 0 },
-                pyusd: { raw: BigInt(0), human: 0 },
-                usds: { raw: BigInt(0), human: 0 }
-            };
+            // Token account doesn't exist
+            return { raw: BigInt(0), human: 0 };
         }
+    }
+
+    // Get all balances for display
+    private async getAllBalances(publicKey: string): Promise<Map<string, { raw: bigint; human: number }>> {
+        const balances = new Map<string, { raw: bigint; human: number }>();
+
+        for (const asset of AVAILABLE_ASSETS) {
+            const balance = await this.getAssetBalance(publicKey, asset);
+            balances.set(asset.symbol, balance);
+        }
+
+        return balances;
     }
 
     private async handleStart(msg: TelegramBot.Message) {
@@ -230,21 +266,33 @@ class BreezeBot {
         }
 
         const publicKey = userData.publicKey!;
-        const balances = await this.getBalances(publicKey);
+
+        // Fetch strategy info for APY
+        await this.fetchStrategyInfo();
+
+        // Get wallet balances for all assets
+        const walletBalances = await this.getAllBalances(publicKey);
         const breezeBalance = await this.getUserCurrentValue(publicKey);
-        const currentYield = await this.getBreezeYieldFromAPI(publicKey);
+
+        let balanceStr = '';
+        for (const asset of AVAILABLE_ASSETS) {
+            const balance = walletBalances.get(asset.symbol);
+            const apy = this.getApyForMint(asset.mint);
+            const apyStr = apy !== null ? ` (${apy.toFixed(2)}% APY)` : '';
+
+            if (asset.symbol === 'SOL') {
+                balanceStr += `• ${asset.symbol}: ${balance?.human.toFixed(4) || '0.0000'} ◎${apyStr}\n`;
+            } else {
+                balanceStr += `• ${asset.symbol}: ${balance?.human.toFixed(2) || '0.00'}${apyStr}\n`;
+            }
+        }
 
         const message =
             '🌊 **BREEZE INTEGRATION BOT** 🌊\n\n' +
             `💳 Wallet: \`${publicKey.slice(0, 8)}...${publicKey.slice(-8)}\`\n\n` +
-            '💰 **Balances:**\n' +
-            `• SOL: ${balances.sol.toFixed(4)} ◎\n` +
-            `• USDC: ${balances.usdc.human.toFixed(2)} 💵\n` +
-            `• USDT: ${balances.usdt.human.toFixed(2)} 💵\n` +
-            `• PYUSD: ${balances.pyusd.human.toFixed(2)} 💵\n` +
-            `• USDS: ${balances.usds.human.toFixed(2)} 💵\n\n` +
-            `🌊 **Breeze Balance:** $${breezeBalance.toFixed(2)}\n` +
-            `📈 **Current APY:** ${currentYield.toFixed(2)}%\n\n` +
+            '💰 **Wallet Balances:**\n' +
+            balanceStr + '\n' +
+            `🌊 **Breeze Balance:** $${breezeBalance.toFixed(2)}\n\n` +
             '🚀 Ready to earn yield with Breeze!';
 
         const keyboard = {
@@ -276,24 +324,70 @@ class BreezeBot {
         });
     }
 
+    // Get total Breeze balance using getBreezeBalances with strategyId
     private async getUserCurrentValue(userPublicKey: string): Promise<number> {
         try {
-            const data = await this.breezeSDK.getUserBalances({
-                userId: userPublicKey
+            const data = await this.breezeSDK.getBreezeBalances({
+                userId: userPublicKey,
+                strategyId: STRATEGY_ID
             });
 
             // Calculate total from data array
             let total = 0;
             for (const balance of data.data) {
-                if (balance.yield_balance) {
-                    total += parseFloat(balance.yield_balance.funds) / Math.pow(10, balance.decimals);
-                }
+                total += balance.total_position_value / Math.pow(10, balance.decimals);
             }
             return total;
         } catch (error) {
             console.error('Error fetching user current value:', error);
             return 0;
         }
+    }
+
+    // Get Breeze balance for a specific asset symbol
+    private async getUserAssetBalance(userPublicKey: string, symbol: string): Promise<number> {
+        try {
+            const data = await this.breezeSDK.getBreezeBalances({
+                userId: userPublicKey,
+                strategyId: STRATEGY_ID
+            });
+
+            for (const balance of data.data) {
+                if (balance.token_symbol === symbol) {
+                    return balance.total_position_value / Math.pow(10, balance.decimals);
+                }
+            }
+            return 0;
+        } catch (error) {
+            console.error(`Error fetching user ${symbol} balance:`, error);
+            return 0;
+        }
+    }
+
+    // Get all Breeze balances mapped by symbol using getBreezeBalances with strategyId
+    private async getUserBreezeBalances(userPublicKey: string): Promise<Map<string, { balance: number; apy: number }>> {
+        const balances = new Map<string, { balance: number; apy: number }>();
+
+        try {
+            const data = await this.breezeSDK.getBreezeBalances({
+                userId: userPublicKey,
+                strategyId: STRATEGY_ID,
+                sortBy: 'balance',
+                sortOrder: 'desc'
+            });
+
+            for (const balance of data.data) {
+                const positionValue = balance.total_position_value / Math.pow(10, balance.decimals);
+                balances.set(balance.token_symbol, {
+                    balance: positionValue,
+                    apy: balance.apy
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching user Breeze balances:', error);
+        }
+
+        return balances;
     }
 
     private async getBreezeYieldFromAPI(userPublicKey: string): Promise<number> {
@@ -328,20 +422,42 @@ class BreezeBot {
     private async showEarnYieldInterface(chatId: number) {
         const userData = this.users.get(chatId)!;
         const publicKey = userData.publicKey!;
-        const balances = await this.getBalances(publicKey);
-        const currentYield = await this.getBreezeYieldFromAPI(publicKey);
-        const breezeBalance = await this.getUserCurrentValue(publicKey);
+
+        // Fetch strategy info for APY
+        await this.fetchStrategyInfo();
+
+        const walletBalances = await this.getAllBalances(publicKey);
+        const breezeBalances = await this.getUserBreezeBalances(publicKey);
+
+        let walletBalanceStr = '';
+        let breezeBalanceStr = '';
+
+        for (const asset of AVAILABLE_ASSETS) {
+            const walletBal = walletBalances.get(asset.symbol);
+            const breezeBal = breezeBalances.get(asset.symbol);
+            const apy = this.getApyForMint(asset.mint);
+
+            const apyStr = apy !== null ? ` (${apy.toFixed(2)}% APY)` : '';
+
+            if (walletBal && walletBal.human > 0) {
+                walletBalanceStr += `• ${asset.symbol}: ${walletBal.human.toFixed(asset.decimals > 6 ? 4 : 2)}${apyStr}\n`;
+            }
+
+            if (breezeBal && breezeBal.balance > 0) {
+                breezeBalanceStr += `• ${asset.symbol}: ${breezeBal.balance.toFixed(asset.decimals > 6 ? 4 : 2)}\n`;
+            }
+        }
+
+        if (!walletBalanceStr) walletBalanceStr = 'No supported assets in wallet\n';
+        if (!breezeBalanceStr) breezeBalanceStr = 'No deposits yet\n';
 
         const message =
             '🌊 **Earn Yield with Breeze** 🌊\n\n' +
-            '💰 **Current Balances:**\n' +
-            `• USDC: ${balances.usdc.human.toFixed(2)} 💵\n` +
-            `• USDT: ${balances.usdt.human.toFixed(2)} 💵\n` +
-            `• PYUSD: ${balances.pyusd.human.toFixed(2)} 💵\n` +
-            `• USDS: ${balances.usds.human.toFixed(2)} 💵\n\n` +
-            `📈 **Current Breeze Yield:** ${currentYield.toFixed(1)}% APY\n` +
-            `🌊 **Deposited in Breeze:** $${breezeBalance.toFixed(2)}\n\n` +
-            '💡 Earn passive yield on your stablecoins!';
+            '💰 **Wallet Balances:**\n' +
+            walletBalanceStr + '\n' +
+            '🌊 **Breeze Deposits:**\n' +
+            breezeBalanceStr + '\n' +
+            '💡 Deposit to earn passive yield!';
 
         const keyboard = {
             inline_keyboard: [
@@ -360,41 +476,107 @@ class BreezeBot {
     }
 
     private async showDepositInterface(chatId: number) {
-        const message =
-            '📥 **Deposit to Breeze** 📥\n\n' +
-            'Select the asset you want to deposit:';
+        // Fetch strategy info for APY and available assets
+        await this.fetchStrategyInfo();
 
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: '💵 USDC (Supported)', callback_data: 'deposit_usdc' }],
-                [{ text: '💵 USDT (Coming Soon)', callback_data: 'deposit_unsupported' }],
-                [{ text: '💵 PYUSD (Coming Soon)', callback_data: 'deposit_unsupported' }],
-                [{ text: '💵 USDS (Coming Soon)', callback_data: 'deposit_unsupported' }],
-                [{ text: '🔙 Back', callback_data: 'earn_yield' }]
-            ]
-        };
+        const availableAssets = this.strategyInfo?.assets || [];
+
+        let message = '📥 **Deposit to Breeze** 📥\n\n' +
+            'Select the asset you want to deposit:\n\n';
+
+        // Build keyboard with all available assets and their APYs
+        const assetButtons: TelegramBot.InlineKeyboardButton[][] = [];
+
+        for (const asset of AVAILABLE_ASSETS) {
+            const apy = this.getApyForMint(asset.mint);
+            const isAvailable = availableAssets.length === 0 || availableAssets.includes(asset.mint);
+
+            if (isAvailable && apy !== null) {
+                assetButtons.push([{
+                    text: `${asset.symbol} (${apy.toFixed(2)}% APY)`,
+                    callback_data: `deposit_asset_${asset.symbol}`
+                }]);
+            }
+        }
+
+        if (assetButtons.length === 0) {
+            message += '⚠️ No assets available for deposit. Please try again later.';
+        }
+
+        assetButtons.push([{ text: '🔙 Back', callback_data: 'earn_yield' }]);
 
         await this.bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown',
-            reply_markup: keyboard
+            reply_markup: { inline_keyboard: assetButtons }
         });
     }
 
     private async showWithdrawInterface(chatId: number) {
         const userData = this.users.get(chatId)!;
-        const breezeBalance = await this.getUserCurrentValue(userData.publicKey!);
+
+        // Get all Breeze balances
+        const breezeBalances = await this.getUserBreezeBalances(userData.publicKey!);
+
+        let message = '📤 **Withdraw from Breeze** 📤\n\n' +
+            'Select the asset you want to withdraw:\n\n';
+
+        // Build keyboard with assets that have balances
+        const assetButtons: TelegramBot.InlineKeyboardButton[][] = [];
+
+        for (const asset of AVAILABLE_ASSETS) {
+            const breezeBal = breezeBalances.get(asset.symbol);
+            if (breezeBal && breezeBal.balance > 0) {
+                const displayBalance = asset.decimals > 6
+                    ? breezeBal.balance.toFixed(4)
+                    : breezeBal.balance.toFixed(2);
+                assetButtons.push([{
+                    text: `${asset.symbol}: ${displayBalance}`,
+                    callback_data: `withdraw_asset_${asset.symbol}`
+                }]);
+            }
+        }
+
+        if (assetButtons.length === 0) {
+            message += '⚠️ No assets available to withdraw.';
+        }
+
+        assetButtons.push([{ text: '🔙 Back', callback_data: 'earn_yield' }]);
+
+        await this.bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: assetButtons }
+        });
+    }
+
+    private async showDepositAmountSelection(chatId: number) {
+        const userData = this.users.get(chatId)!;
+        const selectedAsset = userData.selectedAsset;
+
+        if (!selectedAsset) {
+            await this.bot.sendMessage(chatId, '❌ No asset selected. Please select an asset first.');
+            await this.showDepositInterface(chatId);
+            return;
+        }
+
+        const balance = await this.getAssetBalance(userData.publicKey!, selectedAsset);
+        const apy = this.getApyForMint(selectedAsset.mint);
+        const apyStr = apy !== null ? `\n📈 APY: ${apy.toFixed(2)}%` : '';
+
+        const displayBalance = selectedAsset.decimals > 6
+            ? balance.human.toFixed(4)
+            : balance.human.toFixed(6);
 
         const message =
-            '📤 **Withdraw from Breeze** 📤\n\n' +
-            `💰 Available to withdraw: $${breezeBalance.toFixed(2)} USDC\n\n` +
-            'Select withdrawal amount:';
+            `📥 **${selectedAsset.symbol} Deposit Amount** 📥\n\n` +
+            `💰 Available ${selectedAsset.symbol}: ${displayBalance}${apyStr}\n\n` +
+            'Select deposit amount:';
 
         const keyboard = {
             inline_keyboard: [
-                [{ text: '50%', callback_data: 'withdraw_50' }],
-                [{ text: '100%', callback_data: 'withdraw_100' }],
-                [{ text: '💰 Custom Amount', callback_data: 'withdraw_custom' }],
-                [{ text: '🔙 Back', callback_data: 'earn_yield' }]
+                [{ text: '50%', callback_data: 'deposit_amount_50' }],
+                [{ text: '100%', callback_data: 'deposit_amount_100' }],
+                [{ text: '💰 Custom Amount', callback_data: 'deposit_amount_custom' }],
+                [{ text: '🔙 Back', callback_data: 'deposit' }]
             ]
         };
 
@@ -404,21 +586,33 @@ class BreezeBot {
         });
     }
 
-    private async showDepositAmountSelection(chatId: number) {
+    private async showWithdrawAmountSelection(chatId: number) {
         const userData = this.users.get(chatId)!;
-        const balances = await this.getBalances(userData.publicKey!);
+        const selectedAsset = userData.selectedAsset;
+
+        if (!selectedAsset) {
+            await this.bot.sendMessage(chatId, '❌ No asset selected. Please select an asset first.');
+            await this.showWithdrawInterface(chatId);
+            return;
+        }
+
+        const breezeBalance = await this.getUserAssetBalance(userData.publicKey!, selectedAsset.symbol);
+
+        const displayBalance = selectedAsset.decimals > 6
+            ? breezeBalance.toFixed(4)
+            : breezeBalance.toFixed(6);
 
         const message =
-            '📥 **USDC Deposit Amount** 📥\n\n' +
-            `💰 Available USDC: ${balances.usdc.human.toFixed(6)}\n\n` +
-            'Select deposit amount:';
+            `📤 **${selectedAsset.symbol} Withdrawal Amount** 📤\n\n` +
+            `💰 Available to withdraw: ${displayBalance} ${selectedAsset.symbol}\n\n` +
+            'Select withdrawal amount:';
 
         const keyboard = {
             inline_keyboard: [
-                [{ text: '50%', callback_data: 'deposit_usdc_50' }],
-                [{ text: '100%', callback_data: 'deposit_usdc_100' }],
-                [{ text: '💰 Custom Amount', callback_data: 'deposit_usdc_custom' }],
-                [{ text: '🔙 Back', callback_data: 'deposit' }]
+                [{ text: '50%', callback_data: 'withdraw_amount_50' }],
+                [{ text: '100%', callback_data: 'withdraw_amount_100' }],
+                [{ text: '💰 Custom Amount', callback_data: 'withdraw_amount_custom' }],
+                [{ text: '🔙 Back', callback_data: 'withdraw' }]
             ]
         };
 
@@ -451,10 +645,17 @@ class BreezeBot {
         }
     }
 
-    // FIXED: Updated processDeposit method with proper BigInt handling
+    // Create deposit transaction using direct API call with strategy_id + mint
     private async processDeposit(chatId: number, percentage?: number, customAmount?: number) {
         const userData = this.users.get(chatId)!;
-        const balances = await this.getBalances(userData.publicKey!);
+        const selectedAsset = userData.selectedAsset;
+
+        if (!selectedAsset) {
+            await this.bot.sendMessage(chatId, '❌ No asset selected. Please select an asset first.');
+            return;
+        }
+
+        const balance = await this.getAssetBalance(userData.publicKey!, selectedAsset);
 
         let tokenAmount: bigint;
         let humanAmount: number;
@@ -462,37 +663,38 @@ class BreezeBot {
 
         if (percentage === 100) {
             // Use exact raw balance for 100%
-            tokenAmount = balances.usdc.raw;
-            humanAmount = balances.usdc.human;
+            tokenAmount = balance.raw;
+            humanAmount = balance.human;
             isAll = true;
         } else if (percentage === 50) {
             // Calculate 50% of raw balance
-            tokenAmount = balances.usdc.raw / BigInt(2);
-            humanAmount = this.convertFromTokenAmount(tokenAmount, 'USDC');
+            tokenAmount = balance.raw / BigInt(2);
+            humanAmount = this.convertFromTokenAmount(tokenAmount, selectedAsset.decimals);
         } else if (customAmount) {
             humanAmount = customAmount;
-            tokenAmount = this.convertToTokenAmount(customAmount, 'USDC');
+            tokenAmount = this.convertToTokenAmount(customAmount, selectedAsset.decimals);
         } else {
             return;
         }
 
         if (tokenAmount <= 0) {
-            await this.bot.sendMessage(chatId, '❌ Insufficient USDC balance!');
+            await this.bot.sendMessage(chatId, `❌ Insufficient ${selectedAsset.symbol} balance!`);
             return;
         }
 
-        console.log(`Deposit: ${humanAmount} USDC (${tokenAmount.toString()} token units)`);
+        console.log(`Deposit: ${humanAmount} ${selectedAsset.symbol} (${tokenAmount.toString()} token units)`);
 
         try {
-            console.log(`Creating deposit transaction: ${humanAmount} USDC (${tokenAmount.toString()} token units)`);
+            console.log(`Creating deposit transaction: ${humanAmount} ${selectedAsset.symbol} (${tokenAmount.toString()} token units)`);
 
-            // Call Breeze SDK for deposit
+            // Use SDK to create deposit transaction with strategyId + baseAsset
             const data = await this.breezeSDK.createDepositTransaction({
-                fundId: BREEZE_FUND_ID,
-                amount: Number(tokenAmount), // Convert BigInt to number
+                strategyId: STRATEGY_ID,
+                baseAsset: selectedAsset.mint,
+                amount: Number(tokenAmount),
                 all: isAll,
                 userKey: userData.publicKey!,
-                payerKey: undefined
+                payerKey: userData.publicKey!
             });
 
             // Check if response is string (success) or error object
@@ -505,19 +707,28 @@ class BreezeBot {
                 serializedTx: data as string,
                 type: 'deposit',
                 amount: humanAmount,
-                asset: 'USDC'
+                asset: selectedAsset.symbol
             };
 
-            await this.showTransactionConfirmation(chatId, 'deposit', humanAmount, 'USDC');
+            await this.showTransactionConfirmation(chatId, 'deposit', humanAmount, selectedAsset.symbol);
         } catch (error) {
             console.error('Deposit error:', error);
             await this.bot.sendMessage(chatId, '❌ Failed to create deposit transaction. Please try again.');
         }
     }
 
+    // Create withdraw transaction using direct API call with strategy_id + mint
     private async processWithdraw(chatId: number, percentage?: number, customAmount?: number) {
         const userData = this.users.get(chatId)!;
-        const breezeBalance = await this.getUserCurrentValue(userData.publicKey!);
+        const selectedAsset = userData.selectedAsset;
+
+        if (!selectedAsset) {
+            await this.bot.sendMessage(chatId, '❌ No asset selected. Please select an asset first.');
+            return;
+        }
+
+        // Get Breeze balance for this specific asset
+        const breezeBalance = await this.getUserAssetBalance(userData.publicKey!, selectedAsset.symbol);
 
         let humanAmount: number;
         let isAll = false;
@@ -530,31 +741,32 @@ class BreezeBot {
             tokenAmount = 0;
         } else if (percentage === 50) {
             humanAmount = breezeBalance * 0.5;
-            tokenAmount = Number(this.convertToTokenAmount(humanAmount, 'USDC'));
+            tokenAmount = Number(this.convertToTokenAmount(humanAmount, selectedAsset.decimals));
         } else if (customAmount) {
             humanAmount = customAmount;
-            tokenAmount = Number(this.convertToTokenAmount(customAmount, 'USDC'));
+            tokenAmount = Number(this.convertToTokenAmount(customAmount, selectedAsset.decimals));
         } else {
             return;
         }
 
         if (humanAmount <= 0) {
-            await this.bot.sendMessage(chatId, '❌ No funds available to withdraw!');
+            await this.bot.sendMessage(chatId, `❌ No ${selectedAsset.symbol} funds available to withdraw!`);
             return;
         }
 
-        console.log(`Withdraw: ${humanAmount} USDC (${tokenAmount} token units, all=${isAll})`);
+        console.log(`Withdraw: ${humanAmount} ${selectedAsset.symbol} (${tokenAmount} token units, all=${isAll})`);
 
         try {
-            console.log(`Creating withdraw transaction: ${humanAmount} USDC (${tokenAmount} token units, all=${isAll})`);
+            console.log(`Creating withdraw transaction: ${humanAmount} ${selectedAsset.symbol} (${tokenAmount} token units, all=${isAll})`);
 
-            // Call Breeze SDK for withdraw
+            // Use SDK to create withdraw transaction with strategyId + baseAsset
             const data = await this.breezeSDK.createWithdrawTransaction({
-                fundId: BREEZE_FUND_ID,
+                strategyId: STRATEGY_ID,
+                baseAsset: selectedAsset.mint,
                 amount: tokenAmount,
                 all: isAll,
                 userKey: userData.publicKey!,
-                payerKey: undefined
+                payerKey: userData.publicKey!
             });
 
             // Check if response is string (success) or error object
@@ -567,10 +779,10 @@ class BreezeBot {
                 serializedTx: data as string,
                 type: 'withdraw',
                 amount: humanAmount,
-                asset: 'USDC'
+                asset: selectedAsset.symbol
             };
 
-            await this.showTransactionConfirmation(chatId, 'withdraw', humanAmount, 'USDC');
+            await this.showTransactionConfirmation(chatId, 'withdraw', humanAmount, selectedAsset.symbol);
         } catch (error) {
             console.error('Withdraw error:', error);
             await this.bot.sendMessage(chatId, '❌ Failed to create withdrawal transaction. Please try again.');
@@ -792,6 +1004,32 @@ class BreezeBot {
 
         await this.bot.answerCallbackQuery(query.id);
 
+        // Handle asset selection for deposit
+        if (data.startsWith('deposit_asset_')) {
+            const symbol = data.replace('deposit_asset_', '');
+            const asset = getAssetBySymbol(symbol);
+            if (asset) {
+                this.users.get(chatId)!.selectedAsset = asset;
+                await this.showDepositAmountSelection(chatId);
+            } else {
+                await this.bot.sendMessage(chatId, '❌ Asset not found.');
+            }
+            return;
+        }
+
+        // Handle asset selection for withdraw
+        if (data.startsWith('withdraw_asset_')) {
+            const symbol = data.replace('withdraw_asset_', '');
+            const asset = getAssetBySymbol(symbol);
+            if (asset) {
+                this.users.get(chatId)!.selectedAsset = asset;
+                await this.showWithdrawAmountSelection(chatId);
+            } else {
+                await this.bot.sendMessage(chatId, '❌ Asset not found.');
+            }
+            return;
+        }
+
         switch (data) {
             case 'generate_keypair':
                 await this.generateKeypair(chatId);
@@ -811,37 +1049,37 @@ class BreezeBot {
             case 'withdraw':
                 await this.showWithdrawInterface(chatId);
                 break;
-            case 'deposit_usdc':
-                await this.showDepositAmountSelection(chatId);
-                break;
-            case 'deposit_unsupported':
-                await this.bot.sendMessage(chatId, "🚧 This asset isn't supported yet, but it's coming soon! Back to Breeze for now! 😉");
-                setTimeout(() => this.showDepositInterface(chatId), 1500);
-                break;
-            case 'deposit_usdc_50':
+
+            // Deposit amount selection
+            case 'deposit_amount_50':
                 await this.processDeposit(chatId, 50);
                 break;
-            case 'deposit_usdc_100':
+            case 'deposit_amount_100':
                 await this.processDeposit(chatId, 100);
                 break;
-            case 'deposit_usdc_custom':
-                await this.bot.sendMessage(chatId, '💰 Please enter the custom USDC amount to deposit:', {
+            case 'deposit_amount_custom':
+                const depositAsset = this.users.get(chatId)!.selectedAsset;
+                await this.bot.sendMessage(chatId, `💰 Please enter the custom ${depositAsset?.symbol || 'asset'} amount to deposit:`, {
                     reply_markup: { force_reply: true }
                 });
                 this.users.get(chatId)!.currentMenu = 'awaiting_deposit_amount';
                 break;
-            case 'withdraw_50':
+
+            // Withdraw amount selection
+            case 'withdraw_amount_50':
                 await this.processWithdraw(chatId, 50);
                 break;
-            case 'withdraw_100':
+            case 'withdraw_amount_100':
                 await this.processWithdraw(chatId, 100);
                 break;
-            case 'withdraw_custom':
-                await this.bot.sendMessage(chatId, '💰 Please enter the custom USDC amount to withdraw:', {
+            case 'withdraw_amount_custom':
+                const withdrawAsset = this.users.get(chatId)!.selectedAsset;
+                await this.bot.sendMessage(chatId, `💰 Please enter the custom ${withdrawAsset?.symbol || 'asset'} amount to withdraw:`, {
                     reply_markup: { force_reply: true }
                 });
                 this.users.get(chatId)!.currentMenu = 'awaiting_withdraw_amount';
                 break;
+
             case 'confirm_transaction':
                 await this.confirmTransaction(chatId);
                 break;
@@ -893,9 +1131,11 @@ class BreezeBot {
                     await this.bot.sendMessage(chatId, '❌ Please enter a valid amount.');
                     return;
                 }
-                // Add precision check for USDC (max 6 decimal places)
-                if (depositAmount.toString().split('.')[1]?.length > 6) {
-                    await this.bot.sendMessage(chatId, '❌ USDC supports maximum 6 decimal places.');
+                // Check decimal places based on selected asset
+                const depositAsset = userData.selectedAsset;
+                const maxDepositDecimals = depositAsset?.decimals || 6;
+                if (depositAmount.toString().split('.')[1]?.length > maxDepositDecimals) {
+                    await this.bot.sendMessage(chatId, `❌ ${depositAsset?.symbol || 'This asset'} supports maximum ${maxDepositDecimals} decimal places.`);
                     return;
                 }
                 userData.currentMenu = undefined;
@@ -907,9 +1147,11 @@ class BreezeBot {
                     await this.bot.sendMessage(chatId, '❌ Please enter a valid amount.');
                     return;
                 }
-                // Add precision check for USDC (max 6 decimal places)
-                if (withdrawAmount.toString().split('.')[1]?.length > 6) {
-                    await this.bot.sendMessage(chatId, '❌ USDC supports maximum 6 decimal places.');
+                // Check decimal places based on selected asset
+                const withdrawAsset = userData.selectedAsset;
+                const maxWithdrawDecimals = withdrawAsset?.decimals || 6;
+                if (withdrawAmount.toString().split('.')[1]?.length > maxWithdrawDecimals) {
+                    await this.bot.sendMessage(chatId, `❌ ${withdrawAsset?.symbol || 'This asset'} supports maximum ${maxWithdrawDecimals} decimal places.`);
                     return;
                 }
                 userData.currentMenu = undefined;
