@@ -37,7 +37,7 @@ A TypeScript-based Telegram bot that illustartes Breeze integration.
     
     # Breeze API Configuration
     BREEZE_API_KEY=your_breeze_api_key_here
-    BREEZE_FUND_ID=your_breeze_fund_id
+    STRATEGY_ID=your_strategy_id
    ```
   
 3. **Run the bot**

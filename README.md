@@ -20,8 +20,8 @@ An enhanced Telegram bot implementation using the Breeze SDK for more advanced f
 - Simplified authentication
 - Advanced conversation handling
 
-### Website with Breeze UI Library (Coming soon)
-A modern web application showcasing the Breeze UI Library components and design system.
+### Website with Breeze UI Components from the UI Playground
+A modern web application showcasing the Breeze UI components and design system.
 
 **Features:**
 - Pre-built UI components
@@ -29,7 +29,7 @@ A modern web application showcasing the Breeze UI Library components and design 
 
 ## Prerequisites
 
-- Node.js 16+ or Python 3.8+
+- Node.js 16+
 - Breeze API key ([Get yours here](https://docs.breeze.baby/get-your-api-key/instruction))
 
 ## Getting Started

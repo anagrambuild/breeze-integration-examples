@@ -192,7 +192,7 @@ The project uses ES modules with TypeScript. Key configuration:
 | `BOT_TOKEN` | Telegram bot token | `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11` |
 | `SOLANA_RPC_URL` | Solana RPC endpoint | `https://api.mainnet-beta.solana.com` |
 | `BREEZE_API_KEY` | Breeze API authentication | `your_api_key_here` |
-| `BREEZE_FUND_ID` | Target fund identifier | `HxAjeopgWUQn6H4xCQipe2gUFcZc66B1G7u7w6Hk1VZq` |
+| `STRATEGY_ID` | Target strategy id | `your-strategy-id` |
 
 ## 📚 Learn More
 
