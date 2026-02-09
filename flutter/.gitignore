@@ -1,0 +1,77 @@
+# OS / Editor
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+*.swo
+*~
+.atom/
+.history
+.svn/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Dart / Flutter / Pub
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+.pub-cache/
+build/
+coverage/
+doc/api/
+
+# Local environment / secrets
+.env*
+.env
+.env.*
+!.env.example
+
+# Flutter-generated platform files
+**/ios/Flutter/.last_build_id
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Pods/
+ios/.symlinks/
+
+macos/Flutter/ephemeral/
+macos/Flutter/Generated.xcconfig
+macos/Flutter/flutter_export_environment.sh
+macos/Pods/
+macos/.symlinks/
+
+linux/flutter/ephemeral/
+windows/flutter/ephemeral/
+
+# Android generated / local machine config
+android/.gradle/
+android/local.properties
+android/captures/
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# Xcode user state
+**/xcuserdata/
+**/*.xcuserstate
+**/*.moved-aside
+**/*.pbxuser
+**/*.mode1v3
+**/*.mode2v3
+**/*.perspectivev3
+**/DerivedData/
+
+# Symbolication / obfuscation artifacts
+app.*.symbols
+app.*.map.json
+
+.claude
