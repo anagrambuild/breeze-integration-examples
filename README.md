@@ -27,9 +27,18 @@ A modern web application showcasing the Breeze UI components and design system.
 - Pre-built UI components
 - Responsive design
 
+### Flutter App with Breeze Integration
+A Flutter demo app that integrates with the Breeze API and Solana blockchain. Includes a built-in wallet and strategy management for deposits and withdrawals.
+
+**Features:**
+- On-device Solana wallet with balance tracking and QR code receive flow
+- Strategy tab for depositing into and withdrawing from Breeze strategies
+- Configurable RPC and API endpoints via environment variables
+
 ## Prerequisites
 
 - Node.js 16+
+- Flutter SDK (for the Flutter example)
 - Breeze API key ([Get yours here](https://docs.breeze.baby/get-your-api-key/instruction))
 
 ## Getting Started
